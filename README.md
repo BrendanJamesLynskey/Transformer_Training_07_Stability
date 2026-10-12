@@ -8,9 +8,9 @@ Attention-logit growth and entropy collapse; QK-norm and z-loss; one bad batch; 
 
 ## Live, animated companion
 
-This deck is the slide companion to Part 2 (Training) of [Transformer Decoder Explained](https://transformer-decoder-explained.vercel.app/training), where the same model trains in your browser:
+This deck is the slide companion to Part 2 (Training) of [Transformer Decoder Explained](https://transformer-training-explained.vercel.app/training), where the same model trains in your browser:
 
-- [Chapter 8: Stability](https://transformer-decoder-explained.vercel.app/training/08-stability)
+- [Chapter 8: Stability](https://transformer-training-explained.vercel.app/training/08-stability)
 
 ## Where the numbers come from
 
