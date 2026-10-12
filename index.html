@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transformer Training 07 — Stability: Loss Spikes and Their Cures</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Manrope:wght@300;400;500;600;700&family=Source+Code+Pro:ital,wght@0,400;0,500;0,600;0,700;1,400;1,700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0f2027;
+            --bg-card: #13272f;
+            --bg-code: #182f38;
+            --text-primary: #ede7dd;
+            --text-secondary: #8ca5a9;
+            --accent: #83c395;
+            --accent-dim: #83c39544;
+            --accent-glow: #83c39533;
+            --border: #23404a;
+            --font-display: 'Sora', sans-serif;
+            --font-mono: 'Source Code Pro', 'Source Code Pro', monospace;
+            --font-body: 'Manrope', sans-serif;
+            --max-width: 900px;
+        }
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        html { scroll-behavior: smooth; }
+        body {
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: var(--font-body);
+            font-size: 17px;
+            line-height: 1.7;
+            overflow-x: hidden;
+        }
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 2rem 1.5rem;
+            text-align: center;
+            position: relative;
+        }
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%);
+            pointer-events: none;
+            z-index: 0;
+        }
+        .hero > * { position: relative; z-index: 1; }
+        .series-label {
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            color: var(--accent);
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            margin-bottom: 1rem;
+        }
+        .hero h1 {
+            font-family: var(--font-display);
+            font-size: clamp(2rem, 5vw, 3.2rem);
+            font-weight: 700;
+            color: var(--text-primary);
+            line-height: 1.2;
+            margin-bottom: 1rem;
+        }
+        .hero h1 .accent { color: var(--accent); }
+        .hero .subtitle {
+            font-size: 1.1rem;
+            color: var(--text-secondary);
+            max-width: 640px;
+            margin-bottom: 2rem;
+        }
+        .tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            justify-content: center;
+            margin-bottom: 2.5rem;
+        }
+        .tag {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            padding: 0.25rem 0.75rem;
+            border-radius: 999px;
+            border: 1px solid var(--accent);
+            color: var(--accent);
+            background: var(--accent-dim);
+            white-space: nowrap;
+        }
+        .pipeline {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: center;
+            gap: 0.25rem;
+            margin-bottom: 1rem;
+            max-width: var(--max-width);
+        }
+        .pipeline-step {
+            font-family: var(--font-mono);
+            font-size: 0.7rem;
+            padding: 0.3rem 0.7rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text-secondary);
+            white-space: nowrap;
+        }
+        .pipeline-arrow { color: var(--accent); font-size: 0.9rem; font-weight: 700; }
+        .slide {
+            min-height: 100vh;
+            max-width: var(--max-width);
+            margin: 0 auto;
+            padding: 4rem 1.5rem;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+        .slide-number {
+            font-family: var(--font-display);
+            font-size: 5rem;
+            font-weight: 700;
+            color: var(--accent-dim);
+            position: absolute;
+            top: 2rem;
+            right: 1.5rem;
+            line-height: 1;
+            user-select: none;
+        }
+        .slide h2 {
+            font-family: var(--font-display);
+            font-size: 1.9rem;
+            font-weight: 700;
+            color: var(--accent);
+            margin-bottom: 1.5rem;
+            line-height: 1.25;
+        }
+        .slide h3 {
+            font-family: var(--font-display);
+            font-size: 1.3rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-top: 1.5rem;
+            margin-bottom: 0.75rem;
+        }
+        .slide p { margin-bottom: 1rem; color: var(--text-secondary); }
+        .slide p strong { color: var(--text-primary); }
+        .slide ul, .slide ol { margin-bottom: 1rem; padding-left: 1.5rem; color: var(--text-secondary); }
+        .slide li { margin-bottom: 0.4rem; }
+        .slide li strong { color: var(--text-primary); }
+        .slide code {
+            font-family: var(--font-mono);
+            font-size: 0.88em;
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            padding: 0.05rem 0.35rem;
+            border-radius: 3px;
+            color: #cfd7d1;
+        }
+        .code-block {
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            margin: 1.25rem 0;
+            overflow: hidden;
+        }
+        .code-header {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            color: var(--accent);
+            background: rgba(131,195,149,0.08);
+            padding: 0.4rem 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+        .code-block pre { margin: 0; padding: 1rem; overflow-x: auto; }
+        .code-block code {
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            line-height: 1.6;
+            color: #cfd7d1;
+            background: transparent;
+            border: none;
+            padding: 0;
+        }
+        .kw { color: #f48f70; }
+        .fn { color: #d4c0ea; }
+        .str { color: #c3dbea; }
+        .cm { color: #8ca5a9; font-style: italic; }
+        .num { color: #a8cee8; }
+        .type { color: #eac48b; }
+        .dir { color: #f48f70; }
+        .mac { color: #eac48b; }
+        .table-wrap {
+            overflow-x: auto;
+            margin: 1.25rem 0;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+        }
+        table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+        th {
+            background: var(--bg-code);
+            color: var(--accent);
+            font-weight: 600;
+            text-align: left;
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid var(--border);
+            font-family: var(--font-display);
+            white-space: nowrap;
+        }
+        td {
+            padding: 0.6rem 1rem;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-secondary);
+        }
+        tr:last-child td { border-bottom: none; }
+        tr:nth-child(even) td { background: rgba(19,39,47,0.5); }
+        .diagram-flow {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            margin: 1.5rem 0;
+            padding: 1.5rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+        .diagram-box {
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            padding: 0.5rem 1rem;
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-primary);
+            text-align: center;
+            white-space: nowrap;
+        }
+        .diagram-box.accent { border-color: var(--accent); color: var(--accent); background: rgba(131,195,149,0.08); }
+        .diagram-box.dim { color: var(--text-secondary); border-color: var(--border); }
+        .diagram-arrow { color: var(--accent); font-size: 1.3rem; font-weight: 700; }
+        .diagram-vertical {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.3rem;
+            margin: 1.5rem 0;
+            padding: 1.5rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+        .diagram-vertical .diagram-arrow { font-size: 1.1rem; }
+        .hierarchy {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            margin: 1.5rem 0;
+            padding: 1.5rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+        .hierarchy-level { display: flex; align-items: center; gap: 0.75rem; }
+        .hierarchy-label {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            min-width: 80px;
+            text-align: right;
+        }
+        .hierarchy-items { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+        .hierarchy-item {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            padding: 0.3rem 0.6rem;
+            border-radius: 4px;
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+        }
+        .hierarchy-item.accent { border-color: var(--accent); color: var(--accent); background: rgba(131,195,149,0.08); }
+        .diagram-grid {
+            display: grid;
+            gap: 0.75rem;
+            margin: 1.5rem 0;
+            padding: 1.5rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+        .diagram-grid.cols-2 { grid-template-columns: 1fr 1fr; }
+        .diagram-grid.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+        .diagram-panel {
+            padding: 1rem;
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+        }
+        .diagram-panel.accent-border { border-left: 3px solid var(--accent); }
+        .diagram-panel h4 {
+            font-family: var(--font-display);
+            font-size: 1rem;
+            color: var(--accent);
+            margin-bottom: 0.5rem;
+        }
+        .diagram-panel p, .diagram-panel ul { font-size: 0.85rem; }
+        .callout {
+            background: var(--bg-card);
+            border-left: 3px solid var(--accent);
+            border-radius: 0 8px 8px 0;
+            padding: 1rem 1.25rem;
+            margin: 1.25rem 0;
+        }
+        .callout p { margin-bottom: 0; }
+        .callout p + p { margin-top: 0.5rem; }
+        .callout .callout-label {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            color: var(--accent);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: 0.3rem;
+        }
+        .contents-list { list-style: none; padding-left: 0; counter-reset: contents; }
+        .contents-list li {
+            counter-increment: contents;
+            padding: 0.6rem 0;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        .contents-list li:last-child { border-bottom: none; }
+        .contents-list li::before {
+            content: counter(contents, decimal-leading-zero);
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            color: var(--accent);
+            min-width: 2rem;
+        }
+        .contents-list a { color: var(--text-primary); text-decoration: none; transition: color 0.2s; }
+        .contents-list a:hover { color: var(--accent); }
+        .footer {
+            text-align: center;
+            padding: 3rem 1.5rem;
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            border-top: 1px solid var(--border);
+            max-width: var(--max-width);
+            margin: 0 auto;
+        }
+        .footer a { color: var(--accent); text-decoration: none; }
+        .footer a:hover { text-decoration: underline; }
+        .canvas-wrap {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            margin: 1.25rem 0;
+            overflow-x: auto;
+        }
+        .canvas-wrap canvas, .canvas-wrap svg { display: block; margin: 0 auto; max-width: 100%; }
+        .badge {
+            display: inline-block;
+            font-family: var(--font-mono);
+            font-size: 0.65rem;
+            padding: 0.1rem 0.45rem;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            vertical-align: middle;
+            margin-left: 0.3rem;
+        }
+        .badge.ok    { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+        .badge.warn  { border-color: #eac48b; color: #eac48b; background: rgba(234,196,139,0.08); }
+        .badge.bad   { border-color: #f48f70; color: #f48f70; background: rgba(244,143,112,0.08); }
+        @media (max-width: 640px) {
+            .slide { padding: 3rem 1rem; min-height: auto; }
+            .slide-number { font-size: 3rem; top: 1.5rem; right: 1rem; }
+            .slide h2 { font-size: 1.5rem; }
+            .diagram-grid.cols-2, .diagram-grid.cols-3 { grid-template-columns: 1fr; }
+            .pipeline { gap: 0.15rem; }
+            .pipeline-step { font-size: 0.6rem; padding: 0.2rem 0.4rem; }
+            .hero h1 { font-size: 1.8rem; }
+            table { font-size: 0.78rem; }
+        }
+        .slide p a, .slide td a, .slide li a, .callout a { color: var(--accent); text-decoration: none; border-bottom: 1px dotted var(--accent); }
+        .slide p a:hover, .slide td a:hover, .slide li a:hover, .callout a:hover { border-bottom-style: solid; }
+        .hero { overflow: hidden; }
+        .diagram-panel { min-width: 0; }
+        .metric-label .katex, .callout-label .katex, .series-label .katex,
+        .metric-label .katex *, .callout-label .katex * { text-transform: none; }
+        .canvas-wrap canvas { image-rendering: auto; }
+        .katex-display { overflow-x: auto; overflow-y: hidden; padding: 0.25rem 0; }
+        @media (max-width: 640px) { .katex-display { font-size: 0.8em; } }
+        .chart-wrap { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; margin: 1.25rem 0; }
+        .chart-wrap svg { display: block; width: 100%; height: auto; }
+        .chart-cap { font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.4rem; }
+        .live-link { font-family: var(--font-mono); font-size: 0.8rem; margin-top: 1rem; }
+        .widget { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin: 1.25rem 0; }
+        .widget .row { display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: center; margin-bottom: 0.6rem; }
+        .widget label { font-family: var(--font-mono); font-size: 0.78rem; color: var(--text-secondary); display: flex; gap: 0.5rem; align-items: center; }
+        .widget input[type=range] { width: 160px; max-width: 100%; accent-color: var(--accent); }
+        .widget select { background: var(--bg-code); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px; padding: 0.25rem 0.4rem; font-family: var(--font-mono); font-size: 0.78rem; }
+        .widget button { background: var(--bg-code); color: var(--accent); border: 1px solid var(--accent); border-radius: 4px; padding: 0.35rem 0.8rem; font-family: var(--font-mono); font-size: 0.78rem; cursor: pointer; min-height: 36px; }
+        .widget button:hover { background: var(--accent-dim); }
+        .widget .out { font-family: var(--font-mono); font-size: 0.82rem; color: var(--text-primary); }
+        .widget .cap { font-size: 0.82rem; color: var(--text-secondary); min-height: 2.6em; }
+        .widget svg { display: block; width: 100%; height: auto; }
+        .num-strong { color: var(--text-primary); font-weight: 600; }
+    /* deck-mobile-fix:hero */ .hero{overflow:hidden}@supports (overflow-x:clip){.hero{overflow:visible;overflow-x:clip}}
+    /* deck-mobile-fix:phone */ @media (max-width:640px){.diagram-box,.tier-fill,.section-divider>span,.action-btn{white-space:normal;overflow-wrap:anywhere}.diagram-grid>*,.diagram-panel,.diagram-box,.code-block,.callout,.metric,.control-group,.control-row>*,.pipeline-body,.roll-track>*,.tier-fill,.timeline-row>*{min-width:0;max-width:100%}p,li,a,code,td,th,.callout,.diagram-panel{overflow-wrap:break-word}pre{max-width:100%;overflow-x:auto}table{display:block;max-width:100%;overflow-x:auto}.katex-display,.bits,.canvas-wrap,.influence-map-wrapper,.timeline-track,div:has(>.bank-cell){max-width:100%;overflow-x:auto;overflow-y:hidden}select,input,img,video,iframe,.action-btn{max-width:100%}canvas{max-width:100%;height:auto}}
+            /* tt-charts */
+        .chart .plot-bg { fill: none; }
+        .chart .grid { stroke: var(--border); stroke-width: 1; }
+        .chart .axis { stroke: var(--text-secondary); stroke-width: 1; }
+        .chart .lbl { fill: var(--text-secondary); font-family: var(--font-mono); font-size: 12px; }
+        .chart .lbl.ax { fill: var(--text-primary); font-size: 12.5px; }
+        .chart .hline { stroke: var(--text-secondary); stroke-dasharray: 2 4; }
+        .chart .ln { fill: none; stroke-width: 2.2; }
+        .chart .eb { stroke-width: 1.4; }
+        .chart .legend-bg { fill: var(--bg-primary); stroke: var(--border); opacity: 0.92; }
+        .s1 { stroke: #56b4e9; fill: #56b4e9; } .s2 { stroke: #e69f00; fill: #e69f00; }
+        .s3 { stroke: #009e73; fill: #3fbf96; } .s4 { stroke: #cc79a7; fill: #cc79a7; }
+        .s5 { stroke: #f0e442; fill: #f0e442; } .s6 { stroke: #d55e00; fill: #d55e00; }
+        .s0 { stroke: var(--text-secondary); fill: var(--text-secondary); }
+        .ln { fill: none !important; }
+        .chart .bar { stroke: none; opacity: 0.85; }
+        .chart .lbl.inbar { fill: var(--bg-primary); font-weight: 600; }
+        @media (max-width: 640px) { .chart .lbl { font-size: 14px; } .chart .lbl.ax { font-size: 14px; } .wg-text, .wg-dim { font-size: 15px; } }
+        .wg-cell { fill: var(--bg-code); stroke: var(--border); }
+        .wg-text { fill: var(--text-primary); font-family: var(--font-mono); font-size: 13px; }
+        .wg-dim { fill: var(--text-secondary); font-family: var(--font-mono); font-size: 13px; }
+        .wg-hot { fill: #e69f00; } .wg-done { fill: #009e73; } .wg-cool { fill: #56b4e9; } .wg-idle { fill: var(--bg-code); stroke: var(--border); }
+        .wg-fwd { fill: #56b4e9; } .wg-bwd { fill: #e69f00; }
+    </style>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
+        onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'\\(',right:'\\)',display:false}],throwOnError:false})"></script>
+</head>
+<body>
+<header class="hero">
+    <div class="series-label">Transformer Training &mdash; Presentation 07</div>
+    <h1>Stability: <span class="accent">Spikes and Cures</span></h1>
+    <p class="subtitle">Large runs fail in two ways small ones rarely show: the loss jumps, or part of the model quietly saturates. Both reproduced on a tiny model: attention-logit growth and QK-norm, z-loss, one bad batch, clipping and skipping, and what large runs report doing.</p>
+
+    <div class="tags">
+        <span class="tag">Loss spike</span>
+        <span class="tag">Attention-logit growth</span>
+        <span class="tag">QK-norm</span>
+        <span class="tag">z-loss</span>
+        <span class="tag">Gradient clipping</span>
+        <span class="tag">Batch skipping</span>
+        <span class="tag">Adam &beta;<sub>2</sub></span>
+    </div>
+
+    <div class="pipeline">
+        <span class="pipeline-step">Spike</span>
+        <span class="pipeline-arrow">&rarr;</span>
+        <span class="pipeline-step">Diagnose</span>
+        <span class="pipeline-arrow">&rarr;</span>
+        <span class="pipeline-step">Guard</span>
+        <span class="pipeline-arrow">&rarr;</span>
+        <span class="pipeline-step">Restart</span>
+    </div>
+</header>
+
+<section class="slide" id="slide-00">
+    <div class="slide-number">00</div>
+    <h2>Topics We&rsquo;ll Cover</h2>
+    <ul class="contents-list">
+        <li><a href="#slide-01">Two Ways Large Runs Fail</a></li>
+        <li><a href="#slide-02">Attention-Logit Growth and Entropy Collapse</a></li>
+        <li><a href="#slide-03">A Saturating Softmax, Live</a></li>
+        <li><a href="#slide-04">The Cures: QK-Norm and z-Loss</a></li>
+        <li><a href="#slide-05">A Loss Spike: One Bad Batch</a></li>
+        <li><a href="#slide-06">Clipping and Skipping</a></li>
+        <li><a href="#slide-07">What Large Runs Report</a></li>
+        <li><a href="#slide-08">What to Take Away</a></li>
+    </ul>
+    <div class="callout">
+        <div class="callout-label">Live companion and sources</div>
+        <p>This deck follows <a href="https://transformer-decoder-explained.vercel.app/training/08-stability">chapter 8, stability</a>, where a run at ten times the default learning rate shows one attention head collapse onto single characters. Measured numbers: <a href="https://github.com/BrendanJamesLynskey/transformer-explainer/blob/main/results.md">results.md</a> &sect;8a&ndash;8b.</p>
+    </div>
+</section>
+
+<section class="slide" id="slide-01">
+    <div class="slide-number">01</div>
+    <h2>Two Ways Large Runs Fail</h2>
+    <div class="diagram-grid cols-2">
+        <div class="diagram-panel accent-border">
+            <h4>Loud: a loss spike</h4>
+            <p>The loss suddenly jumps, and either recovers or never comes back. Often one step with a huge gradient throws the weights somewhere bad.</p>
+        </div>
+        <div class="diagram-panel accent-border">
+            <h4>Quiet: saturation</h4>
+            <p>The loss stops improving because part of the model has saturated: attention heads that put all their weight on one position pass no gradient back, so they stop learning.</p>
+        </div>
+    </div>
+    <p>Both can be reproduced on Part 1&rsquo;s 5,376-parameter model, three seeds each, and both have standard cures.</p>
+</section>
+
+<section class="slide" id="slide-02">
+    <div class="slide-number">02</div>
+    <h2>Attention-Logit Growth and Entropy Collapse</h2>
+    <p>At a high learning rate the query and key weights grow, the scores \(q^\top k/\sqrt{d_k}\) grow with their product, and the softmax becomes a hard maximum: each position attends to exactly one other, the attention entropy falls towards zero, and the gradient through the softmax vanishes (<a href="https://brendanjameslynskey.github.io/Transformer_Training_03_Backpropagation/#slide-04">deck 03</a>). <a href="https://arxiv.org/abs/2302.05442">Dehghani et al. (2023)</a> saw exactly this diverge an 8-billion-parameter vision transformer; <a href="https://arxiv.org/abs/2309.14322">Wortsman et al. (2023)</a> showed the same instability in small models at high learning rates.</p>
+    <div class="table-wrap">
+        <table>
+            <thead><tr><th>Peak lr</th><th>Run</th><th>Final validation loss</th><th>Largest score</th><th>Entropy (nats)</th></tr></thead>
+            <tbody>
+                <tr><td>0.01</td><td>baseline</td><td>2.277 &plusmn; 0.090</td><td>42.2</td><td>0.62</td></tr>
+                <tr><td>0.01</td><td>QK-norm</td><td>2.272 &plusmn; 0.033</td><td>11.0</td><td>0.60</td></tr>
+                <tr><td>0.01</td><td>z-loss 1e-3</td><td>2.310 &plusmn; 0.113</td><td>67.5</td><td>0.38</td></tr>
+                <tr><td>0.1</td><td>baseline</td><td>2.571 &plusmn; 0.102</td><td>16,104.7</td><td>0.05</td></tr>
+                <tr><td>0.1</td><td>QK-norm</td><td>2.102 &plusmn; 0.039</td><td>24.4</td><td>0.34</td></tr>
+                <tr><td>0.1</td><td>z-loss 1e-3</td><td>2.589 &plusmn; 0.102</td><td>19,648.6</td><td>0.05</td></tr>
+            </tbody>
+        </table>
+    </div>
+    <p>AdamW, warmup 50 + cosine, 2,000 steps, clip 1.0, three seeds; largest attention score and mean attention entropy on the validation windows at the end (results.md &sect;8b). At 0.1 the baseline does not blow up; it learns less.</p>
+</section>
+
+<section class="slide" id="slide-03">
+    <div class="slide-number">03</div>
+    <h2>A Saturating Softmax, Live</h2>
+    <p>Eight attention scores for one query, multiplied by a growing scale (as the \(W_Q, W_K\) weights grow). Watch the weights, the entropy \(H = -\sum_j p_j \log p_j\) and the size of the gradient the softmax passes back.</p>
+    <div class="widget" id="sat-widget">
+        <div class="row">
+            <label>score scale <input type="range" id="sat-s" min="0" max="60" value="5"></label>
+            <span class="out" id="sat-out"></span>
+        </div>
+        <svg id="sat-svg" viewBox="0 0 480 170" role="img" aria-label="Softmax weights as the scores grow"></svg>
+        <div class="cap" id="sat-cap" aria-live="polite"></div>
+    </div>
+    <script>
+    (function () {
+        const base = [0.8, -0.3, 0.45, 1.0, 0.1, -0.6, 0.95, 0.3];
+        const dP = [0.5, -1.2, 0.8, 0.3, -0.4, 1.1, -0.7, 0.2];
+        const svg = document.getElementById('sat-svg'), s = document.getElementById('sat-s');
+        function upd() {
+            const k = s.value / 5, z = base.map(v => v * k), m = Math.max(...z), e = z.map(v => Math.exp(v - m)), S = e.reduce((a, b) => a + b, 0), p = e.map(v => v / S);
+            const H = -p.reduce((a, q) => a + (q > 0 ? q * Math.log(q) : 0), 0);
+            const c = p.reduce((a, q, j) => a + q * dP[j], 0), dS = p.map((q, j) => q * (dP[j] - c));
+            const g = Math.sqrt(dS.reduce((a, v) => a + v * v, 0));
+            svg.innerHTML = p.map((q, j) => '<rect x="' + (40 + j * 54) + '" y="' + (140 - q * 120) + '" width="40" height="' + (q * 120) + '" class="' + (q > 0.5 ? 'wg-hot' : 'wg-cool') + '"/>' +
+                '<text class="wg-dim" x="' + (60 + j * 54) + '" y="160" text-anchor="middle">' + q.toFixed(2) + '</text>').join('') +
+                '<line x1="30" x2="470" y1="140" y2="140" stroke="var(--border)"/>';
+            document.getElementById('sat-out').textContent = 'largest score ' + m.toFixed(1) + ' · entropy ' + H.toFixed(3) + ' nats (max ' + Math.log(8).toFixed(3) + ') · |∂L/∂scores| ' + g.toExponential(1);
+            document.getElementById('sat-cap').textContent = H < 0.05 ? 'Saturated: one weight is ~1, the entropy is ~0, and almost no gradient reaches the scores. The head has stopped learning.' :
+                H > 1.9 ? 'Diffuse: weights spread over all eight positions.' : 'Sharpening: weight concentrates on the highest score.';
+        }
+        s.addEventListener('input', upd); upd();
+    })();
+    </script>
+    <p>The upstream gradient \(\delta P\) is fixed in this demo; only the scale changes. Toy numbers, chosen for the picture; the measured run is on the previous slide.</p>
+</section>
+
+<section class="slide" id="slide-04">
+    <div class="slide-number">04</div>
+    <h2>The Cures: QK-Norm and z-Loss</h2>
+    <div class="diagram-grid cols-2">
+        <div class="diagram-panel accent-border">
+            <h4>QK-norm</h4>
+            <p>Apply a LayerNorm to each head&rsquo;s queries and keys before the dot product, so the scores cannot grow just because the weights do (only the norm&rsquo;s gain can scale them). At learning rate 0.1 the largest score stays at 24.4 and the run reaches <strong>2.102 &plusmn; 0.039</strong>: the best of every run here, because the higher learning rate is now usable.</p>
+        </div>
+        <div class="diagram-panel accent-border">
+            <h4>z-loss</h4>
+            <p>PaLM added \(10^{-4}\log^2 Z\) to the loss (<a href="https://arxiv.org/abs/2204.02311">Chowdhery et al. 2022</a>; here \(10^{-3}\)), pulling the output softmax&rsquo;s normaliser \(\log Z\) towards 0. It targets a different instability, output logits drifting, and does nothing for attention: the largest score still reaches 19,649.</p>
+        </div>
+    </div>
+    $$\begin{gathered}\hat q = \operatorname{LN}(q),\quad \hat k = \operatorname{LN}(k) \\ L = L_{\text{CE}} + c\,\overline{(\log Z)^2}\end{gathered}$$
+    <p>The plainest cure is a lower learning rate, which costs speed.</p>
+</section>
+
+<section class="slide" id="slide-05">
+    <div class="slide-number">05</div>
+    <h2>A Loss Spike: One Bad Batch</h2>
+    <p>Train with momentum (no adaptive scaling) at learning rate 0.5, and at step 1,000 feed one batch that is nothing like the book: every window the character &ldquo;@&rdquo; repeated. Its gradient is huge. 1,400 steps, constant learning rate, three seeds (results.md &sect;8a):</p>
+    <div class="table-wrap">
+        <table>
+            <thead><tr><th>Run</th><th>lr</th><th>Validation loss before</th><th>Just after</th><th>At the end</th></tr></thead>
+            <tbody>
+                <tr><td>momentum, no clipping</td><td>0.5</td><td>2.334, 2.424, 2.296</td><td>17.138, 8.175, 14.494</td><td>diverged, diverged, diverged</td></tr>
+                <tr><td>momentum, clip at 1.0</td><td>0.5</td><td>2.424, 2.454, 2.359</td><td>2.477, 2.598, 2.448</td><td>2.325, 2.351, 2.318</td></tr>
+                <tr><td>momentum, skip the batch</td><td>0.5</td><td>2.334, 2.424, 2.296</td><td>2.334, 2.424, 2.296</td><td>2.322, 2.276, 2.306</td></tr>
+                <tr><td>AdamW (lr 0.01), no clipping</td><td>0.01</td><td>2.367, 2.329, 2.435</td><td>2.377, 2.342, 2.441</td><td>2.229, 2.250, 2.282</td></tr>
+            </tbody>
+        </table>
+    </div>
+    <p>Without protection the step throws the weights far off and every seed diverges. AdamW at its usual learning rate barely notices the batch even unclipped: Adam divides each step by the running size of past gradients, so one large gradient cannot make one large step.</p>
+</section>
+
+<section class="slide" id="slide-06">
+    <div class="slide-number">06</div>
+    <h2>Clipping and Skipping</h2>
+    $$g \leftarrow g \cdot \min\Big(1, \frac{c}{\lVert g\rVert + 10^{-6}}\Big)$$
+    <div class="diagram-grid cols-2">
+        <div class="diagram-panel accent-border">
+            <h4>Gradient clipping</h4>
+            <p>Rescale any gradient whose global norm exceeds a threshold \(c\) (<a href="https://arxiv.org/abs/1211.5063">Pascanu et al. 2013</a>; PyTorch&rsquo;s <code>clip_grad_norm_</code>; \(c = 1\) here and in the default run). The bad batch now moves the loss only a little, and the run carries on.</p>
+        </div>
+        <div class="diagram-panel accent-border">
+            <h4>Skipping</h4>
+            <p>Skip a batch whose gradient norm is far above the recent average (here 4&times;): the step never happens, so the loss does not move at all.</p>
+        </div>
+    </div>
+    <p>Why momentum is fragile: its step is \(\eta\) times a running sum of gradients, so one gradient \(k\) times too large moves the weights \(k\) times too far. Adam&rsquo;s step \(\eta\,\hat m/\sqrt{\hat v}\) is bounded by about \(\eta\) per coordinate.</p>
+</section>
+
+<section class="slide" id="slide-07">
+    <div class="slide-number">07</div>
+    <h2>What Large Runs Report</h2>
+    <ul>
+        <li><strong>PaLM</strong>&rsquo;s largest model spiked about 20 times despite clipping; the fix was to restart from a checkpoint about 100 steps before the spike and skip 200&ndash;500 batches around it. The spikes were not caused by bad data as such: the same batches did not spike from another checkpoint (<a href="https://arxiv.org/abs/2204.02311">Chowdhery et al. 2022, &sect;5.1</a>).</li>
+        <li><a href="https://arxiv.org/abs/2304.09871">Molybog et al. (2023)</a> argue such divergence is an artifact of Adam itself: it can enter a state where its update is large yet essentially uncorrelated with the direction that lowers the loss, more often in deep models with large batches.</li>
+        <li>LLaMA used Adam&rsquo;s \(\beta_2 = 0.95\), lower than the 0.999 default, so \(v\) reacts faster to a sudden large gradient (<a href="https://arxiv.org/abs/2302.13971">Touvron et al. 2023</a>).</li>
+    </ul>
+    <div class="callout">
+        <div class="callout-label">So the toolkit is several guards at once</div>
+        <p>Warmup, clipping, QK-norm or z-loss, a lower \(\beta_2\), monitoring the gradient norm, and checkpoints to restart from (<a href="https://brendanjameslynskey.github.io/Transformer_Training_13_Scaling_Laws_and_Running_a_Job/">deck 13</a>). The site&rsquo;s <a href="https://colab.research.google.com/github/BrendanJamesLynskey/transformer-explainer/blob/main/notebooks/08_attention_logit_growth.ipynb">notebook 08</a> repeats the QK-norm / z-loss comparison on a width-512 model on a GPU: <strong>GPU run pending</strong>.</p>
+    </div>
+</section>
+
+<section class="slide" id="slide-08">
+    <div class="slide-number">08</div>
+    <h2>What to Take Away</h2>
+    <ul>
+        <li>A high learning rate grows attention scores until heads saturate: entropy &rarr; 0, gradient &rarr; 0. Measured: largest score 16,105 at lr 0.1 against 42.2 at 0.01.</li>
+        <li><strong>QK-norm</strong> fixes that and makes the higher rate usable; <strong>z-loss</strong> guards the output softmax, not attention.</li>
+        <li>One bad batch diverges unclipped momentum; <strong>clipping</strong> or <strong>skipping</strong> saves it; Adam barely notices.</li>
+        <li>At scale: restarts from checkpoints, skipped batches, lower \(\beta_2\), and watching the gradient norm.</li>
+    </ul>
+    <p class="live-link">Animated: <a href="https://transformer-decoder-explained.vercel.app/training/08-stability">chapter 8, stability</a> &middot; next: <a href="https://brendanjameslynskey.github.io/Transformer_Training_08_Mixed_Precision/">deck 08, mixed precision</a></p>
+</section>
+
+<footer class="footer">
+    <p>Part of the <a href="https://github.com/BrendanJamesLynskey/LLM_Hub_Transformer_Training">Transformer Training series</a> &middot; live, animated companion: <a href="https://transformer-decoder-explained.vercel.app/training/08-stability">chapter 8, Stability</a> of <a href="https://transformer-decoder-explained.vercel.app/training">Transformer Decoder Explained, Part 2</a></p>
+    <p style="margin-top: 0.5rem; font-size: 0.8rem;"><a href="https://brendanjameslynskey.github.io/Transformer_Training_06_Init_Norm_and_muP/">&larr; 06 Init, Norm &amp; &micro;P</a> &nbsp;&middot;&nbsp; <a href="https://brendanjameslynskey.github.io/LLM_Hub_Transformer_Training/">Series index</a> &nbsp;&middot;&nbsp; <a href="https://brendanjameslynskey.github.io/Transformer_Training_08_Mixed_Precision/">08 Mixed Precision &rarr;</a></p>
+    <p style="margin-top: 0.5rem; font-size: 0.75rem;">Measured numbers: <a href="https://github.com/BrendanJamesLynskey/transformer-explainer/blob/main/results.md">results.md</a> (transformer-explainer @15b1c9f). Code on these slides is cut from that repository.</p>
+</footer>
+<script>
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+        anchor.addEventListener('click', function (e) {
+            e.preventDefault();
+            const target = document.querySelector(this.getAttribute('href'));
+            if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+    });
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                entry.target.style.opacity = '1';
+                entry.target.style.transform = 'translateY(0)';
+            }
+        });
+    }, { threshold: 0.1 });
+    document.querySelectorAll('.slide').forEach(slide => {
+        slide.style.opacity = '0';
+        slide.style.transform = 'translateY(30px)';
+        slide.style.transition = 'opacity 0.6s ease, transform 0.6s ease';
+        observer.observe(slide);
+    });
+</script>
+</body>
+</html>
